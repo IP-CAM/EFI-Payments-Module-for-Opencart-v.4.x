@@ -24,6 +24,38 @@ class EfiOpenFinanceWebhook extends \Opencart\System\Engine\Controller
         try {
             $this->response->addHeader('Content-Type: application/json');
 
+            // 1. Validação HMAC via query param ?hmac=
+            $hmacReceived = $this->request->get['hmac'] ?? '';
+            if (!$hmacReceived) {
+                $this->log->write('HMAC não informado na query.');
+                $this->response->addHeader($this->request->server['SERVER_PROTOCOL'] . ' 403 Forbidden');
+                $this->response->setOutput('HMAC ausente');
+                return;
+            }
+
+            // Sempre usa https na montagem da base URL para o HMAC
+            $baseUrl = 'https://' . $this->request->server['HTTP_HOST'];
+            $language = $this->request->get['language'] ?? $this->config->get('config_language');
+            $webhookUrlBase = $baseUrl . '/index.php?route=extension/efi/payment/efi_open_finance_webhook&language=' . $language;
+
+            // Recupera o segredo da config
+            $clientId = $this->config->get('payment_efi_client_id_production');
+            if (!$clientId) {
+                $this->log->write('Client ID não encontrado na configuração.');
+                $this->response->addHeader($this->request->server['SERVER_PROTOCOL'] . ' 500 Internal Server Error');
+                $this->response->setOutput('Configuração do módulo ausente');
+                return;
+            }
+            $hmacExpected = hash_hmac('sha256', $webhookUrlBase, $clientId);
+
+            // Compara os HMACs
+            if (!hash_equals($hmacExpected, $hmacReceived)) {
+                $this->log->write("HMAC inválido. Recebido: $hmacReceived | Esperado: $hmacExpected | Base: $webhookUrlBase | ClientId: $clientId");
+                $this->response->addHeader($this->request->server['SERVER_PROTOCOL'] . ' 403 Forbidden');
+                $this->response->setOutput('HMAC inválido');
+                return;
+            }
+
             $input = file_get_contents('php://input');
             $webhookData = json_decode($input, true);
 
